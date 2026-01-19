@@ -564,7 +564,6 @@ cmd_logs()    { need_root; journalctl -u "${APP}.service" -n 200 --no-pager; ech
 
 cmd_testdnsList() {
   need_root
-#   load_old_defaults
   # run runner command directly (not via systemd)
   "$RUNNER" testdns
 }
@@ -586,7 +585,7 @@ EOF
 }
 
 main() {
-  local cmd="${1:-}"
+  local cmd="${1:-install}"   # default = install
   case "$cmd" in
     install)   cmd_install ;;
     start)     cmd_start ;;
