@@ -27,7 +27,9 @@ Without this step, the client will not work.
 
 ### Installation
 
-``` curl -fsSL https://raw.githubusercontent.com/hossinasaadi/dnstt-runner/master/install.sh | sudo bash ```
+``` bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/dnstt-runner/master/install.sh) ```
+
+Then Use `dnstt-runner` for more info.
 
 ### Flow explanation
 

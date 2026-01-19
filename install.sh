@@ -456,7 +456,7 @@ case "$cmd" in
     test_dns_servers
     ;;
   *)
-    echo "Usage: $0 {start|stop|restart|status}"
+    echo "Usage: $0 {start|stop|restart|status|testdns}"
     exit 1
     ;;
 esac
