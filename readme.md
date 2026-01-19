@@ -25,6 +25,9 @@ Without this step, the client will not work.
 ## 2. How It Works
 [ Your Device ] -> [ Bridge VPS ] -> [ DNSTT Instances with Load Balancer ]
 
+### Installation
+
+``` curl -fsSL https://raw.githubusercontent.com/hossinasaadi/dnstt-runner/main/install.sh | sudo bash ```
 
 ### Flow explanation
 
