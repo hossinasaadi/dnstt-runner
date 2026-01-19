@@ -77,7 +77,10 @@ sudo ./install.sh stop
 sudo ./install.sh restart
 sudo ./install.sh status
 sudo ./install.sh logs
+sudo ./install.sh testdns
 ```
+### Test dns command
+This command asks for a space-separated list of DNS server IPs, then tests each one using your current dnstt-runner configuration (domain, public key, target SSH user/password, instance ports). It measures connection + curl time through the SOCKS tunnel and prints which DNS servers are fastest.
 
 ## 6. Credits & Thanks ❤️
 
