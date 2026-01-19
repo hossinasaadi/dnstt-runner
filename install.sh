@@ -6,7 +6,7 @@ BIN_DIR="/usr/local/bin"
 ETC_DIR="/etc/${APP}"
 STATE_DIR="/var/lib/${APP}"
 LOG_DIR="/var/log/${APP}"
-RUNNER="${BIN_DIR}/${APP}-runner.sh"
+RUNNER="${BIN_DIR}/${APP}.sh"
 ENV_FILE="${ETC_DIR}/${APP}.env"
 SECRET_FILE="${ETC_DIR}/secret.pass"
 SERVICE_FILE="/etc/systemd/system/${APP}.service"
@@ -196,6 +196,10 @@ mkdir -p "$STATE_DIR" "$LOG_DIR"
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 
+PUBKEY="${DNSTT_PUBKEY}"
+DOMAIN="${DNSTT_DOMAIN}"
+TARGET="${TARGET_USER}@127.0.0.1"   # optional convenience
+
 if [[ ! -f "$SECRET_FILE" ]]; then
   echo "[!] Missing secret file: $SECRET_FILE"
   echo "    Re-run installer and enter password, or switch to SSH keys."
@@ -314,6 +318,96 @@ stop_haproxy() {
   pkill -f "$haproxy_cfg" >/dev/null 2>&1 || true
 }
 
+test_dns_servers() {
+  read -rp "Enter DNS IPs (space separated): " IP_LIST
+  [ -z "$IP_LIST" ] && echo "No IPs entered" && return 1
+
+  i=0
+  PIDS=()
+
+  cleanup() {
+    echo
+    echo "[!] Cleaning up..."
+    for pid in "${PIDS[@]}"; do
+      kill "$pid" 2>/dev/null || true
+    done
+  }
+  trap cleanup INT TERM
+
+  for IP in $IP_LIST; do
+  (
+    DNSTT_PORT=$((8001 + i))
+    SOCKS_PORT=$((9001 + i))
+
+    LOG="/tmp/test_${IP}_${DNSTT_PORT}.log"
+    slog="/tmp/ssh_test_${i}.log"
+
+    echo "[*] $IP -> testing (dnstt=$DNSTT_PORT socks=$SOCKS_PORT)"
+
+    # ---- DNSTT ----
+    "$DNSTT_BIN" \
+      -pubkey "$PUBKEY" \
+      -udp "$IP:53" \
+      "$DOMAIN" 127.0.0.1:$DNSTT_PORT \
+      >>"$LOG" 2>&1 &
+    DPID=$!
+
+    sleep 2
+
+    dport="$DNSTT_PORT"
+    sport="$SOCKS_PORT"
+    idx="$i"
+
+    SSH_CMD="ssh -N \
+    -D 127.0.0.1:$sport \
+    -C \
+    -v \
+    -o PreferredAuthentications=password \
+    -o UserKnownHostsFile=/dev/null \
+    -o PubkeyAuthentication=no \
+    -o StrictHostKeyChecking=no \
+    -o ServerAliveInterval=5 \
+    -o ServerAliveCountMax=20 \
+    -o ExitOnForwardFailure=yes \
+    -p $dport \
+    $TARGET_USER@127.0.0.1"
+
+    sshpass -p "$TARGET_PASS" $SSH_CMD >>"$slog" 2>&1 &
+    SPID=$!
+
+    sleep 40
+
+    # ---- CURL TEST ----
+    CURL_TIME="$(
+      curl --socks5-hostname "127.0.0.1:$SOCKS_PORT" \
+           -m 40 --fail -s \
+           -w "%{time_total}" \
+           http://ifconfig.me/ \
+           -o /dev/null
+    )"
+    RC=$?
+
+    if [ "$RC" -eq 0 ]; then
+      echo "✅ $IP WORKS (time=${CURL_TIME}s)"
+    elif [ "$RC" -eq 35 ]; then
+      echo "🟡 $IP CONNECTED (SSL EOF) (time=${CURL_TIME}s)"
+    else
+      echo "❌ $IP FAIL (rc=$RC time=${CURL_TIME}s)"
+    fi
+
+    kill "$DPID" "$SPID" 2>/dev/null || true
+  ) &
+
+    PIDS+=($!)
+    i=$((i+1))
+  done
+
+  echo
+  echo "[*] Waiting for all tests..."
+  wait
+  echo "[*] All tests finished."
+}
+
 cmd="${1:-}"
 case "$cmd" in
   start)
@@ -337,6 +431,9 @@ case "$cmd" in
     echo "== dnstt-runner status =="
     echo "RUN_COUNT=$RUN_COUNT  HAPROXY=${HAPROXY_LISTEN_IP}:${HAPROXY_LISTEN_PORT}"
     ss -lntup | egrep ":(5002|6002|${HAPROXY_LISTEN_PORT})\b" || true
+    ;;
+  testdns)
+    test_dns_servers
     ;;
   *)
     echo "Usage: $0 {start|stop|restart|status}"
@@ -445,6 +542,13 @@ cmd_restart() { need_root; systemctl restart "${APP}.service"; systemctl --no-pa
 cmd_status()  { need_root; systemctl --no-pager status "${APP}.service" || true; "$RUNNER" status || true; }
 cmd_logs()    { need_root; journalctl -u "${APP}.service" -n 200 --no-pager; echo; ls -la "$LOG_DIR" 2>/dev/null || true; }
 
+cmd_testdnsList() {
+  need_root
+#   load_old_defaults
+  # run runner command directly (not via systemd)
+  "$RUNNER" testdns
+}
+
 usage() {
   cat <<EOF
 Usage: sudo $0 <command>
@@ -456,6 +560,7 @@ Commands:
   restart     Restart service
   status      Show status + listening ports
   logs        Show last 200 journal logs + list log files
+  testdns     Test DNS servers (spawns temp dnstt+ssh per IP, ctrl+c stops all)
   uninstall   Remove everything
 EOF
 }
@@ -469,6 +574,7 @@ main() {
     restart)   cmd_restart ;;
     status)    cmd_status ;;
     logs)      cmd_logs ;;
+    testdns)   cmd_testdnsList ;;
     uninstall) cmd_uninstall ;;
     *) usage; exit 1 ;;
   esac
