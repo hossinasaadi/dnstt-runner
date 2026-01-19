@@ -527,6 +527,12 @@ collect_user_input() {
   [[ -n "$TARGET_PASS" ]] || { echo "[!] password required"; exit 1; }
 }
 
+install_cli() {
+  ln -sf "$RUNNER" /usr/local/bin/dnstt-runner
+  chmod +x /usr/local/bin/dnstt-runner
+  echo "[+] Command installed: dnstt-runner"
+}
+
 cmd_install() {
   need_root
   install_pkgs
@@ -535,6 +541,7 @@ cmd_install() {
   write_env
   write_secret
   write_runner
+  install_cli
   write_service
   systemctl restart "${APP}.service"
   systemctl --no-pager status "${APP}.service" || true
