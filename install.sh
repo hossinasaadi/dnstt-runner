@@ -322,81 +322,101 @@ test_dns_servers() {
   read -rp "Enter DNS IPs (space separated): " IP_LIST
   [ -z "$IP_LIST" ] && echo "No IPs entered" && return 1
 
-  i=0
+  local i=0
   PIDS=()
 
   cleanup() {
     echo
     echo "[!] Cleaning up..."
+    # kill the subshell jobs (they will kill their children via EXIT trap below)
     for pid in "${PIDS[@]}"; do
       kill "$pid" 2>/dev/null || true
     done
+    wait 2>/dev/null || true
   }
   trap cleanup INT TERM
 
+  echo "[!] Test tooks about ~1min"
+
   for IP in $IP_LIST; do
-  (
-    DNSTT_PORT=$((8001 + i))
-    SOCKS_PORT=$((9001 + i))
+    (
+      # --- per-worker cleanup (THIS is the important part) ---
+      DPID=""
+      SPID=""
+      cleanup_worker() {
+        kill "$SPID" "$DPID" 2>/dev/null || true
+        wait "$SPID" "$DPID" 2>/dev/null || true
+      }
+      trap cleanup_worker EXIT INT TERM
 
-    LOG="/tmp/test_${IP}_${DNSTT_PORT}.log"
-    slog="/tmp/ssh_test_${i}.log"
+      DNSTT_PORT=$((4001 + i))
+      SOCKS_PORT=$((4101 + i))
 
-    echo "[*] $IP -> testing (dnstt=$DNSTT_PORT socks=$SOCKS_PORT)"
+      LOG="/tmp/dnstt_test_${i}.log"
+      slog="/tmp/ssh_test_${i}.log"
 
-    # ---- DNSTT ----
-    "$DNSTT_BIN" \
-      -pubkey "$PUBKEY" \
-      -udp "$IP:53" \
-      "$DOMAIN" 127.0.0.1:$DNSTT_PORT \
-      >>"$LOG" 2>&1 &
-    DPID=$!
+      echo "[*] $IP -> testing (dnstt=$DNSTT_PORT socks=$SOCKS_PORT)"
+      echo "[!] Logs: /tmp/{ssh|dnstt}_test_${i}.log"
 
-    sleep 2
+      # ---- DNSTT ----
+      "$DNSTT_BIN" \
+        -pubkey "$PUBKEY" \
+        -udp "$IP:53" \
+        "$DOMAIN" "127.0.0.1:$DNSTT_PORT" \
+        >>"$LOG" 2>&1 &
+      DPID=$!
 
-    dport="$DNSTT_PORT"
-    sport="$SOCKS_PORT"
-    idx="$i"
+      sleep 2
 
-    SSH_CMD="ssh -N \
-    -D 127.0.0.1:$sport \
-    -C \
-    -v \
-    -o PreferredAuthentications=password \
-    -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no \
-    -o StrictHostKeyChecking=no \
-    -o ServerAliveInterval=5 \
-    -o ServerAliveCountMax=20 \
-    -o ExitOnForwardFailure=yes \
-    -p $dport \
-    $TARGET_USER@127.0.0.1"
+      dport="$DNSTT_PORT"
+      sport="$SOCKS_PORT"
 
-    sshpass -p "$TARGET_PASS" $SSH_CMD >>"$slog" 2>&1 &
-    SPID=$!
+      # EXACT same ssh options, but as an array (safe in scripts)
+      SSH_CMD=(
+        ssh -N
+        -D "127.0.0.1:$sport"
+        -C
+        -v
+        -o PreferredAuthentications=password
+        -o UserKnownHostsFile=/dev/null
+        -o PubkeyAuthentication=no
+        -o StrictHostKeyChecking=no
+        -o ServerAliveInterval=5
+        -o ServerAliveCountMax=20
+        -o ExitOnForwardFailure=yes
+        -p "$dport"
+        "$TARGET_USER@127.0.0.1"
+      )
 
-    sleep 40
+      sshpass -p "$TARGET_PASS" "${SSH_CMD[@]}" >>"$slog" 2>&1 &
+      SPID=$!
 
-    # ---- CURL TEST ----
-    CURL_TIME="$(
-      curl --socks5-hostname "127.0.0.1:$SOCKS_PORT" \
-           -m 40 --fail -s \
-           -w "%{time_total}" \
-           http://ifconfig.me/ \
-           -o /dev/null
-    )"
-    RC=$?
+      sleep 40
 
-    if [ "$RC" -eq 0 ]; then
-      echo "✅ $IP WORKS (time=${CURL_TIME}s)"
-    elif [ "$RC" -eq 35 ]; then
-      echo "🟡 $IP CONNECTED (SSL EOF) (time=${CURL_TIME}s)"
-    else
-      echo "❌ $IP FAIL (rc=$RC time=${CURL_TIME}s)"
-    fi
+      # ---- CURL TEST ----
+      set +e
 
-    kill "$DPID" "$SPID" 2>/dev/null || true
-  ) &
+      CURL_TIME="$(
+        curl --socks5-hostname "127.0.0.1:$SOCKS_PORT" \
+             -m 40 --fail -s \
+             -w "%{time_total}" \
+             http://ifconfig.me/ \
+             -o /dev/null
+      )"
+      RC=$?
+      set -e
+      
+      if [ "$RC" -eq 0 ]; then
+        echo "✅ $IP WORKS (time=${CURL_TIME}s)"
+      elif [ "$RC" -eq 35 ]; then
+        echo "🟡 $IP CONNECTED (SSL EOF) (time=${CURL_TIME}s)"
+      else
+        echo "❌ $IP FAIL (rc=$RC time=${CURL_TIME}s)"
+      fi
+
+      # explicit kill is fine; EXIT trap is the safety net
+      kill "$DPID" "$SPID" 2>/dev/null || true
+    ) &
 
     PIDS+=($!)
     i=$((i+1))
